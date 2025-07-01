@@ -28,34 +28,13 @@ test_hypothesis <- function(model, var1, var2, testType, data){
     p_value <- lr_result$p.val
     
     return(p_value)
-  
-  } else if (testType == 'slope_effect') {
-    print(testType)
-    # test if slope of a continuous variable is different from zero
-
-    full_formula <- model
-    #model <- gamlss(full_formula, data = data)
-    model <- lm(full_formula, data = data)
     
-    em <- emtrends(model, ~1, var = var2)  ## asking what the slope of var1 is, holding other variables constant
+  } else if (testType == 'level_slope') {
     
-    result_df <- test(em, null = 0)[,c(2,6)]
-    
-    result_df['testVar'] <- var2
-    result_df['groupVar'] <- "All"
-    result_df['testType'] <- testType
-    
-    result_df[] <- lapply(result_df, function(x) if (is.numeric(x)) round(x, 4) else x)
-    
-    print(result_df)
-    return(result_df)
-    
-  } else if (testType == 'level_slope_effect') {
-    # For each level, test if slope is different from zero
+    ## test if the slope for each group is different from zero
     
     full_formula <- model
-    #model <- gamlss(full_formula, data = data)
-    model <- lm(full_formula, data = data)
+    model <- gamlss(full_formula, data = data)
     formula <- as.formula(paste("~ factor(", var2, ")"))
     em <- emtrends(model, formula, var = var1)
     
@@ -65,38 +44,10 @@ test_hypothesis <- function(model, var1, var2, testType, data){
     test_by_factor <- test(em, null = 0)
     
     test_by_factor <- test_by_factor[,c(1,2,6)]
-    test_by_factor['testType'] <- testType
-    test_by_factor['testVar'] <- var1
-    test_by_factor['groupVar'] <- var2
-    test_by_factor[] <- lapply(test_by_factor, function(x) if (is.numeric(x)) round(x, 4) else x)
+    test_by_factor[] <- lapply(test_by_factor, function(x) if (is.numeric(x)) round(x, 3) else x)
     
+    print(typeof(test_by_factor)) 
     return(test_by_factor)
-    
-  } else if (testType == 'level_slope_pair') {
-    ## test if the slope for 2 groups are different
-    
-    full_formula <- model
-    model <- gamlss(full_formula, data = data)
-    formula <- as.formula(paste("~ factor(", var2, ")"))
-    em <- emtrends(model, formula, var = var1)
-  
-    ## step1: get significance test result
-    test_by_factor <- pairs(em)
-    test_by_factor <- as.data.frame(summary(test_by_factor))
-    test_by_factor<- test_by_factor[, c('contrast','estimate', 'p.value')]
-    
-    ## step2: get effect size along with lower and upper CL
-    es_df <- as.data.frame(summary(eff_size(em, sigma = sigma(model), edf = df.residual(model))))
-    es_df <- es_df[, c('contrast', 'effect.size', 'lower.CL', 'upper.CL' )]
-    
-    ## step3 join the two dataframes
-    result_df <- inner_join(test_by_factor, es_df, by = c('contrast'))
-    result_df['testVar'] <- var1
-    result_df['groupVar'] <- var2
-    result_df['testType'] <- testType
-    result_df[] <- lapply(result_df, function(x) if (is.numeric(x)) round(x, 4) else x)
-    
-    return(result_df)
     
   } else if (testType == 'level_val') {
     
@@ -119,7 +70,6 @@ test_hypothesis <- function(model, var1, var2, testType, data){
     result_df <- inner_join(test_by_factor, es_df, by = c("contrast"))
     result_df['testVar'] <- var1
     result_df['groupVar'] <- "All"
-    result_df['testType'] <- testType
     result_df[] <- lapply(result_df, function(x) if (is.numeric(x)) round(x, 4) else x)
     
     return(result_df)
@@ -144,7 +94,6 @@ test_hypothesis <- function(model, var1, var2, testType, data){
     result_df <- inner_join(test_by_factor, es_df, by = c("contrast", var2))
     result_df['testVar'] <- var1
     result_df['groupVar'] <- var2
-    result_df['testType'] <- testType
     result_df[] <- lapply(result_df, function(x) if (is.numeric(x)) round(x, 4) else x)
     
     return(result_df)

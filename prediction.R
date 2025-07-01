@@ -14,21 +14,7 @@ generate_output <- function(mu_spec, sigma_spec = "~1", distribution = "NO()", d
   sigma_spec <- as.formula(sigma_spec)
   distribution_function <- eval(parse(text = distribution))
 
-  #model <- gamlss(mu_spec, sigma.formula = sigma_spec, family = distribution_function, data = data)
-  model <- gamlss(
-    mu_spec, 
-    sigma.formula = sigma_spec, 
-    #family = NO(), 
-    family = distribution_function,
-    data = data
-  )
-  
-  ## residuals 
-  df_res <- data.frame(
-    residual_mu = resid(model, what = "mu"),
-    fitted = fitted(model)
-  )
-  
+  model <- gamlss(mu_spec, sigma.formula = sigma_spec, family = distribution_function, data = data)
   
   #model <- eval(bquote(gamlss(.(mu_spec), sigma.formula = .(sigma_spec), family = .(distribution_function), data = data)))
   rsq <- Rsq(model, type="Cragg Uhler")
@@ -81,87 +67,8 @@ generate_output <- function(mu_spec, sigma_spec = "~1", distribution = "NO()", d
     ) %>%
     dplyr::select(-one_of("mu.expectation", "mu.se", "logsigma.expectation", "logsigma.se", "df", "t1", "t2", "mu", "logsigma", "sigma"))
 
-  
-  # ### get fit line for the original data
-  # 
-  # # Extract variable names and term labels
-  # term_labels <- attr(terms(mu_spec), "term.labels")
-  # all_vars <- all.vars(mu_spec)[-1]
-  # 
-  # # Identify variable types
-  # var_types <- sapply(data[all_vars], function(x) {
-  #   if (is.factor(x) || is.character(x)) {
-  #     "categorical"
-  #   } else if (is.numeric(x)) {
-  #     "continuous"
-  #   } else {
-  #     class(x)
-  #   }
-  # })
-  # 
-  # # Store each prediction dataframe
-  # prediction_dfs <- list()
-  # 
-  # # Loop through each continuous variable
-  # for (xVar in names(var_types[var_types == "continuous"])) {
-  #   
-  #   # Robust match for any interaction term involving xVar
-  #   interactions <- grep(paste0("(^|:)", xVar, "(:|$)"), term_labels, value = TRUE)
-  #   
-  #   # Find if there's a categorical partner
-  #   groupVar <- NULL
-  #   for (int_term in interactions) {
-  #     parts <- unlist(strsplit(int_term, ":"))
-  #     partner <- setdiff(parts, xVar)
-  #     if (length(partner) == 1 && var_types[partner] == "categorical") {
-  #       groupVar <- partner
-  #       break
-  #     }
-  #   }
-  #   
-  #   # Construct new_data
-  #   if (!is.null(groupVar)) {
-  #     new_data <- setNames(
-  #       expand.grid(
-  #         seq(min(data[[xVar]], na.rm = TRUE),
-  #             max(data[[xVar]], na.rm = TRUE),
-  #             length.out = 100),
-  #         unique(data[[groupVar]])
-  #       ),
-  #       c(xVar, groupVar)
-  #     )
-  #   } else {
-  #     new_data <- data.frame(seq(min(data[[xVar]], na.rm = TRUE),
-  #                                max(data[[xVar]], na.rm = TRUE),
-  #                                length.out = 100))
-  #     names(new_data) <- xVar
-  #   }
-  #   
-  #   # Predict and store
-  #   print(head(new_data))
-  #   print("predicting line fit")
-  #   new_data$fit <- predict(model, newdata = new_data, data = data, type = "response", se.fit = FALSE)
-  #   
-  #   # Add metadata
-  #   new_data$variable <- xVar
-  #   if (is.null(groupVar)) {
-  #     new_data$group <- NA
-  #   } else {
-  #     names(new_data)[names(new_data) == groupVar] <- "group"
-  #   }
-  #   
-  #   # Append to list
-  #   prediction_dfs[[xVar]] <- new_data
-  # }
-  # 
-  # # Combine all individual prediction dataframes
-  # final_df <- do.call(rbind, prediction_dfs)
-  # rownames(final_df) <- NULL
-  
-  
   #return(list(df = output[output$modelcheck_group == model_name,], gd = global_deviance))
-  #return(list(df = output[output$modelcheck_group == model_name,], aic = aic_val, rsq = rsq, linefit_data = final_df))
-  return(list(df = output[output$modelcheck_group == model_name,], aic = aic_val, rsq = rsq, df_res = df_res))
+  return(list(df = output[output$modelcheck_group == model_name,], aic = aic_val, rsq = rsq))
   
 }
 
