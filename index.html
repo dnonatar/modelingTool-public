@@ -1,0 +1,1936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Notebook Interface</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="vis.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px 20px 20px 0;
+        }
+        .cell {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 0px;
+            background-color: #f9f9f9;
+            position: relative;
+        }
+        .input-box {
+            width: 100%;
+            max-width: 100%; /* prevent overflow */
+            box-sizing: border-box; /* include padding in width */
+            height: 27px;
+            min-height: 27px;
+            padding: 4px 8px;
+            font-size: 14px;
+            margin-top: 10px;
+            resize: vertical;
+        }
+        .fit-button, .add-button, .collapse-button {
+            margin-top: 2px;
+            padding: 6px 12px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid #aaa;
+            border-radius: 5px;
+            background-color: #eee;
+            margin-right: 8px;
+        }
+        .output-box {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #eef6ff;
+            border-radius: 5px;
+            border: 1px solid #aac;
+        }
+        .buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .hypothesis-summary-table {
+            border-collapse: collapse;
+            border: 1px solid #ccc;
+        }
+
+        .hypothesis-summary-table th,
+        .hypothesis-summary-table td {
+            border: 1px solid #ccc;
+            padding: 4px 8px;
+            text-align: center;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div style="display: flex;">
+        <!-- Sidebar -->
+        <div id="sidebar" style="
+            width: 100px;
+            background-color: #f0f0f0;
+            border-right: 1px solid #ccc;
+            padding: 6px;
+            transition: width 0.3s;
+        ">
+
+            <button onclick="toggleSidebar()" style="margin-bottom: 10px;">Collapse</button>
+            <div id="feature-list" style="display: flex; flex-direction: column; gap: 4px;"></div>
+        </div>
+
+        <!-- Main Content -->
+        <div style="flex-grow: 1; padding-left: 20px;">
+            <div id="notebook"></div>
+            <button class="add-button" onclick="addCell()">+ Add New Cell</button>
+        </div>
+    </div>
+
+    <script>
+        const API_KEY = '.....';   // replace with API key
+        const gpt_model = "gpt-4";
+
+        let cellCounter = 0;
+        let predCounter = 0;
+
+        const queryLabelMap = {};
+        let queryCounter = 1;
+        const testResultsByModel = new Map();
+
+        // Load the new dataset
+        const datasetPath = "data/cleaned_airline.csv";
+        let originalData;
+        let dataSubset;
+        let currentLineData;
+        let excludeDataStatus;
+
+        let brushedIndices;
+        let brushedData;
+        
+        d3.csv(datasetPath).then(data => {
+            dataset = data;
+            full_dataset = data;
+            dataset.forEach(d => {
+                Object.keys(d).forEach(key => {
+                    d[key] = isNaN(+d[key]) ? d[key] : +d[key]; // Convert numeric values
+                });
+            });
+            originalData = dataset;
+            dataSubset = dataset;
+
+            renderFeatureList();
+        });
+
+        // Feature data
+        const features = [
+            { name: "Price", key: "price", type: "continuous" },
+            { name: "Days remaining", key: "days_remain", type: "continuous" },
+            { name: "Flight duration", key: "duration", type: "continuous" },
+            { name: "Class", key: "class", type: "categorical" },
+            { name: "Destination", key: "destination", type: "categorical" },
+            { name: "Arrival", key: "arrival", type: "categorical" },
+            { name: "Stops", key: "stops", type: "categorical" },
+            { name: "Departure", key: "departure", type: "categorical" },
+            { name: "Origin", key: "origin", type: "categorical" },
+            { name: "Airline", key: "airline", type: "categorical" }
+        ];
+
+        const customCategoryOrder = {
+            class: ["Economy", "Business"],
+            stops: ["zero", "one", "two_or_more"],
+            arrival: ["Early_Morning", "Morning", "Afternoon", "Evening", "Night", "Late_Night"],
+            departure: ["Early_Morning", "Morning", "Afternoon", "Evening", "Night", "Late_Night"]
+            
+        };
+
+        function renderFeatureList() {
+            const featureList = document.getElementById("feature-list");
+            featureList.innerHTML = "";
+            features.forEach(f => {
+                const item = document.createElement("div");
+                item.textContent = f.name;
+                item.style.cursor = "grab";
+                item.style.padding = "2px 4px";
+                item.style.marginBottom = "2px";
+                item.style.fontSize = "12px";
+                item.style.lineHeight = "1.1";
+                item.style.borderRadius = "2px";
+                item.style.background = "#fff";
+                item.style.border = "1px solid #ccc";
+                item.style.width = "fit-content"; 
+                item.style.maxWidth = "100%";  
+
+                item.setAttribute("draggable", "true");
+
+                item.ondragstart = (event) => {
+                    event.dataTransfer.setData("feature", JSON.stringify(f));
+                };
+
+                featureList.appendChild(item);
+            });
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById("sidebar");
+            if (sidebar.style.width === "100px") {
+                sidebar.style.width = "30px";
+                sidebar.querySelector("button").textContent = "→";
+                sidebar.querySelector("#feature-list").style.display = "none";
+            } else {
+                sidebar.style.width = "100px";
+                sidebar.querySelector("button").textContent = "Collapse";
+                sidebar.querySelector("#feature-list").style.display = "flex";
+            }
+        }
+
+
+        function addCell() {
+            const notebook = document.getElementById("notebook");
+            const cell = document.createElement("div");
+            cell.className = "cell";
+            cell.id = `cell-${cellCounter}`;
+
+            // Output box (initially hidden)
+            //const output = document.createElement("div");
+            //output.className = "output-box";
+            //output.style.display = "none";
+
+            // Textarea setup
+            const textarea = document.createElement("textarea");
+            textarea.className = "input-box";
+            textarea.placeholder = "Type your input here...";
+            textarea.style.flex = "1";
+
+            // Fit button
+            const fitButton = document.createElement("button");
+            fitButton.className = "fit-button";
+            fitButton.textContent = "Send";
+            fitButton.onclick = () => fitModel(textarea.value, textarea, fitButton);
+
+            // Input row (textarea + Fit button)
+            const inputRow = document.createElement("div");
+            inputRow.className = "input-row"
+            inputRow.style.display = "flex";
+            inputRow.style.alignItems = "center";
+            inputRow.style.gap = "10px";
+            inputRow.appendChild(textarea);
+            inputRow.appendChild(fitButton);
+
+            // Collapse button in separate row
+            const buttons = document.createElement("div");
+            buttons.className = "buttons";
+
+            /*
+            const collapseButton = document.createElement("button");
+            collapseButton.className = "collapse-button";
+            collapseButton.textContent = "Collapse";
+            collapseButton.onclick = () => {
+                const isHidden = textarea.style.display === "none";
+                textarea.style.display = isHidden ? "block" : "none";
+                output.style.display = isHidden ? "block" : "none";
+                const hypoSection = cell.querySelector(".hypothesis-wrapper");
+                if (hypoSection) {
+                    hypoSection.style.display = isHidden ? "flex" : "none";
+                }
+                collapseButton.textContent = isHidden ? "Collapse" : "Expand";
+            };
+
+            buttons.appendChild(collapseButton);
+            */
+
+            // Assemble and add to notebook
+            cell.appendChild(buttons); // Row with Collapse
+            cell.appendChild(inputRow);   // Row with textarea + Fit Model
+            //cell.appendChild(output);     // Output area
+
+            notebook.appendChild(cell);
+            cellCounter++;
+        }
+
+        function updateDataset(updated_dataset){
+            // add predicted values and residuals to current dataset and feature list (to be used for plotting prediction and HOPs)
+
+            const predPrefix = `pred${predCounter}_`; 
+
+            // loop through 5 draws
+            for (let i = 1; i <= 5; i++) {
+                const predColumn = `${predPrefix}${i}`;
+                const predictedFeatureName = "Predicted " + features[0].name;
+
+                dataSubset.forEach((d, index) => {
+                    d[predColumn] = +updated_dataset[index][predColumn];
+                });
+
+                const predictedFeature = 
+                    {
+                        name: predictedFeatureName,
+                        key: predColumn,
+                        type: "continuous"
+                    };
+                    
+                features.push(predictedFeature);
+
+            }
+
+            const residualColumn = "residual_mu"
+            const residualFeatureName = features[0].name + " Residual";
+
+            const fittedColumn = "fitted"
+
+            dataSubset.forEach((d, index) => {
+                d[residualColumn] = +updated_dataset[index][residualColumn];
+                d[fittedColumn] = +updated_dataset[index][fittedColumn];
+            });
+
+            const residualFeature = 
+                {
+                    name: residualFeatureName,
+                    key: residualColumn,
+                    type: "continuous"
+                };
+                
+            features.push(residualFeature);
+
+            console.log(dataSubset);
+            console.log(features);
+
+        }
+
+
+        async function fitModel(userInput, textarea, fitButton, indexFilter = null) {
+            if (indexFilter == null) {
+                excludeDataStatus = false;
+            }
+
+            const botFormula = await inputToFormula(userInput)
+
+            // Detect if user also model the spread
+
+            // Detect if userInput contains "skewed distribution"
+            const distr = userInput.toLowerCase().includes("skewed distribution") ? "SN1()" : "NO()";
+
+
+            try {
+                const response = await fetch("http://localhost:8000/fit_model", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                            formula_mean: botFormula,
+                            formula_std_dev: "~1",
+                            distribution: distr,
+                            datasetName: "airline",
+                            filters: "",
+                            filter_indices: indexFilter
+                        }) 
+                });
+
+                predCounter = predCounter + 1;
+
+                const data = await response.json();
+                console.log(data)
+                const aic = data.aic;
+                const rsq = data.rsq;
+
+                currentLineData = data.linefit_data;
+                //currentLinePred = data.predfit_data;
+            
+                updateDataset(data.result)
+
+            } catch(error) {
+                console.log(error.message)
+            }
+
+            if (fitButton && fitButton.parentNode) {
+                fitButton.remove();
+            }
+ 
+            // Change button text and behavior to "Edit Model"
+            /*
+            fitButton.textContent = "Edit Model";
+            fitButton.onclick = () => {
+                // Restore textarea
+                message.replaceWith(textarea);
+                fitButton.textContent = "Fit Model";
+                fitButton.onclick = () => fitModel(textarea.value, textarea, fitButton);
+            };
+            */
+            
+            const parentCell = textarea.closest(".cell");
+            
+            // Replace original textarea with printed message 
+            const message = document.createElement("div");
+            message.textContent = userInput;
+            message.className = "query-display";
+            message.style.marginTop = "10px";
+            message.style.fontWeight = "bold";
+            message.style.color = "#333";
+
+            textarea.replaceWith(message);
+                        
+            // Add formula summary message
+            const summaryMessage = document.createElement("div");
+            //summaryMessage.innerHTML = `Here is the linear model corresponding to your interpretation: <strong> ${botFormula} </strong>`;
+            const distrName = distr === "NO()" ? "normal distribution" : "skewed distribution";
+            summaryMessage.innerHTML = `Here is the linear model corresponding to your interpretation: <strong>${botFormula}</strong> <span style="font-weight:normal;">(${distrName})</span>`;
+            summaryMessage.className = "formula-display";
+            summaryMessage.style.marginTop = "10px";
+            summaryMessage.style.fontStyle = "italic";
+            summaryMessage.style.color = "#333";
+
+            // Create vis area container
+            const visAreaDiv = document.createElement("div");
+
+            const visArea = d3.select(visAreaDiv)
+                .attr("class", "vis-area")
+                .attr("style", "display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px;")
+                .on("dragover", event => event.preventDefault())
+                .on("drop", function(event) {
+                    event.preventDefault();
+                    const feature = JSON.parse(event.dataTransfer.getData("feature"));
+                    renderPlot(visArea, feature);
+                });
+
+            // 3. Add visualizations
+            const formulaParts = botFormula.split("~").map(d => d.trim());
+            const outcomeVar = formulaParts[0];
+            const predictorVars = formulaParts[1].split("+").map(d => d.trim());
+             
+            addVis(predictorVars, outcomeVar, visArea, predCounter);
+
+            // 4. Add next input box + Fit button under vis
+            const nextInputRow = document.createElement("div");
+            nextInputRow.className = "input-row"
+            nextInputRow.style.display = "flex";
+            nextInputRow.style.alignItems = "center";
+            nextInputRow.style.gap = "10px";
+            nextInputRow.style.marginTop = "10px";
+
+            const nextTextarea = document.createElement("textarea");
+            nextTextarea.className = "input-box";
+            nextTextarea.placeholder = "Type your input here...";
+            nextTextarea.style.flex = "1";
+
+            const nextFitButton = document.createElement("button");
+            nextFitButton.className = "fit-button";
+            nextFitButton.textContent = "Send";
+            nextFitButton.onclick = () => {
+                const userInput = nextTextarea.value.toLowerCase();
+                if (userInput.includes("hypothesis")) {
+                    console.log("test hypothesis")
+                    sendHypo(userInput, nextTextarea, nextFitButton)
+                } else if (userInput.includes("categorize")) {
+                    computeCat(userInput, nextTextarea, nextFitButton)
+                } else if (userInput.includes("residual")) {
+                    addResidual(userInput, nextTextarea, nextFitButton)
+                } else if (userInput.includes("exclude")) { 
+                    excludeData(userInput, nextTextarea, nextFitButton);
+                } else {
+                    fitModel(userInput, nextTextarea, nextFitButton);
+                }
+            };
+
+            nextInputRow.appendChild(nextTextarea);
+            nextInputRow.appendChild(nextFitButton);
+
+            // Wrap all pieces of this modeling cycle together
+            const cycleBlock = document.createElement("div");
+            cycleBlock.className = "cycle";
+            cycleBlock.style.marginTop = "5px";
+            cycleBlock.style.borderTop = "1px solid #ccc";
+            cycleBlock.style.paddingTop = "5px";
+
+            cycleBlock.appendChild(message);
+            cycleBlock.appendChild(summaryMessage);
+            cycleBlock.appendChild(visAreaDiv);
+            cycleBlock.appendChild(nextInputRow);
+
+            /*
+            const addInputButton = document.createElement("button");
+            addInputButton.textContent = "Add Input";
+            addInputButton.className = "add-input-button";
+            addInputButton.onclick = () => {
+                addInputRowToCycle(cycleBlock);
+                addInputButton.remove(); 
+            };
+            cycleBlock.appendChild(addInputButton);
+            */
+            parentCell.appendChild(cycleBlock);
+
+            
+            
+        }
+
+        function excludeData(userInput, textarea, testButton) {
+            excludeDataStatus = true;
+
+            console.log("exclude these data points");
+
+            // Get the most recent brushed data
+            const keys = Object.keys(brushedPointsByPlot);
+            if (keys.length === 0) {
+                console.log("No brushed data available");
+                return;
+            }
+
+            const latestKey = keys[keys.length - 1];
+            brushedIndices = brushedPointsByPlot[latestKey]?.indices;
+            brushedData = brushedPointsByPlot[latestKey]?.data;
+
+            if (!brushedIndices || brushedIndices.length === 0) {
+                console.log("No indices available");
+                return;
+            }
+
+            console.log(`Latest brushed data has ${brushedIndices.length} points`);
+            console.log(brushedIndices)
+
+            dataSubset = dataset.filter((_, i) => !brushedIndices.includes(i));
+
+            fitModel(userInput, textarea, testButton, brushedIndices);
+
+        }
+
+        function addResidual(userInput, textarea, testButton) {
+
+            const parentCell = textarea.closest(".cell");
+            
+            // Replace original textarea with printed message 
+            const message = document.createElement("div");
+            message.textContent = userInput;
+            message.className = "query-display";
+            message.style.marginTop = "10px";
+            message.style.fontWeight = "bold";
+            message.style.color = "#333";
+
+            textarea.replaceWith(message);
+                        
+            // Add formula summary message
+            const summaryMessage = document.createElement("div");
+            summaryMessage.innerHTML = "Here is the residual plot for this model. Ideally, the pattern should be random.";
+            summaryMessage.className = "formula-display";
+            summaryMessage.style.marginTop = "10px";
+            summaryMessage.style.fontStyle = "italic";
+            summaryMessage.style.color = "#333";
+
+            // Create vis area container
+            const visAreaDiv = document.createElement("div");
+
+            const visArea = d3.select(visAreaDiv)
+                .attr("class", "vis-area")
+                .attr("style", "display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px;")
+                .on("dragover", event => event.preventDefault())
+                .on("drop", function(event) {
+                    event.preventDefault();
+                    const feature = JSON.parse(event.dataTransfer.getData("feature"));
+                    renderPlot(visArea, feature);
+                });
+
+            // 3. Add residual visualizations
+             
+            const residual_key = "residual_mu"
+            const residualFeature = features.find(f => f.key === residual_key);
+
+            const fitted_key = "fitted"
+
+            const residualContainer = visArea.append("div")
+                .attr("class", "plot-container")
+                .style("position", "relative")
+                .style("width", "200px")
+                .style("height", "200px")
+                .style("margin-left", "10px")
+                .style("margin-top", "20px")
+                .style("margin-right", "10px")
+                .style("margin-bottom", "20px")
+
+            renderScatterPlot(residualContainer.node(), fitted_key, residual_key, fitted_key, residualFeature.name, dataset);
+
+
+            // 4. Add next input box + Fit button under vis
+            const nextInputRow = document.createElement("div");
+            nextInputRow.className = "input-row"
+            nextInputRow.style.display = "flex";
+            nextInputRow.style.alignItems = "center";
+            nextInputRow.style.gap = "10px";
+            nextInputRow.style.marginTop = "10px";
+
+            const nextTextarea = document.createElement("textarea");
+            nextTextarea.className = "input-box";
+            nextTextarea.placeholder = "Type your input here...";
+            nextTextarea.style.flex = "1";
+
+            const nextFitButton = document.createElement("button");
+            nextFitButton.className = "fit-button";
+            nextFitButton.textContent = "Send";
+            nextFitButton.onclick = () => {
+                const userInput = nextTextarea.value.toLowerCase();
+                if (userInput.includes("hypothesis")) {
+                    console.log("test hypothesis")
+                    sendHypo(userInput, nextTextarea, nextFitButton)
+                } else if (userInput.includes("categorize")) {
+                    computeCat(userInput, nextTextarea, nextFitButton)
+
+                } else {
+                    fitModel(userInput, nextTextarea, nextFitButton);
+                }
+            };
+
+            nextInputRow.appendChild(nextTextarea);
+            nextInputRow.appendChild(nextFitButton);
+
+            // Wrap all pieces of this modeling cycle together
+            const cycleBlock = document.createElement("div");
+            cycleBlock.className = "cycle";
+            cycleBlock.style.marginTop = "5px";
+            cycleBlock.style.borderTop = "1px solid #ccc";
+            cycleBlock.style.paddingTop = "5px";
+
+            cycleBlock.appendChild(message);
+            cycleBlock.appendChild(summaryMessage);
+            cycleBlock.appendChild(visAreaDiv);
+            cycleBlock.appendChild(nextInputRow);
+
+            parentCell.appendChild(cycleBlock);
+
+            testButton.parentElement?.remove();
+
+        }
+
+        // add relevant visualizations after fitting the model
+        function addVis(predictorVars, outcomeVar, visArea, predCounter) {
+
+            const featureY = outcomeVar;
+            const featureYName = features.find(f => f.key === featureY)?.name || featureY;
+
+            const predicted_key = `pred${predCounter}_1`
+            const predictedFeature = features.find(f => f.key === predicted_key);
+
+            // add distribution plots
+            const distrContainer = visArea.append("div")
+                .attr("class", "plot-container")
+                .style("position", "relative")
+                .style("width", "200px")
+                .style("height", "200px")
+                .style("margin-left", "10px")
+                .style("margin-top", "20px")
+                .style("margin-right", "10px")
+                .style("margin-bottom", "20px")
+
+            const distrContainerPred = visArea.append("div")
+                .attr("class", "plot-container")
+                .style("position", "relative")
+                .style("width", "200px")
+                .style("height", "200px")
+                .style("margin-left", "10px")
+                .style("margin-top", "20px")
+                .style("margin-right", "10px")
+                .style("margin-bottom", "20px")
+
+            renderDistributionPlot(distrContainer.node(), featureY, featureYName, 'visArea', dataSubset = dataSubset)
+            renderDistributionPlot(distrContainerPred.node(), predicted_key, predictedFeature.name, 'visArea', dataSubset = dataSubset)
+
+            predictorVars.forEach(predictorVar => {
+            
+                if (predictorVar.includes(":")) { // if the term is an interaction term (still need to check continuous vs categorical)
+
+                    console.log("interaction terms: doing nothing for now")
+                    /*
+                    const [key1, key2] = predictorVar.split(":").map(k => k.trim());
+                    const feature1 = features.find(f => f.key === key1);
+                    const feature2 = features.find(f => f.key === key2);
+
+                    let featureX, featureY, featureXName, featureYName;
+
+                    if (feature1.type === "categorical" && feature2.type === "continuous") {
+                        featureX = key1;
+                        featureY = key2;
+                    } else if (feature1.type === "continuous" && feature2.type === "categorical") {
+                        featureX = key2;
+                        featureY = key1;
+                    } else {
+                        // If both same type or both categorical/continuous, default to key1:x, key2:y
+                        featureX = key1;
+                        featureY = key2;
+                    }
+
+                    featureXName = features.find(f => f.key === featureX)?.name || featureX;
+                    featureYName = features.find(f => f.key === featureY)?.name || featureY;
+
+                    const thisContainer = visArea.append("div")
+                            .attr("class", "plot-container")
+                            .style("position", "relative")
+                            .style("width", "200px")
+                            .style("height", "200px")
+                            .style("margin", "20px")
+                            .attr("data-feature-x", featureX);
+                        
+                    const predictContainer = visArea.append("div")
+                        .attr("class", "plot-container")
+                        .style("position", "relative")
+                        .style("width", "200px")
+                        .style("height", "200px")
+                        .style("margin", "20px")
+                        .attr("data-feature-x", featureX);
+
+                    const predicted_key = `pred${predCounter}_1`
+                    const predictedFeature = features.find(f => f.key === predicted_key);
+
+                    if (features.find(f => f.key === featureX).type === "continuous" &&
+                        features.find(f => f.key === featureY).type === "continuous") {
+
+                        renderScatterPlot(thisContainer.node(), featureX, featureY, featureXName, featureYName); 
+                        renderScatterPlot(predictContainer.node(), featureX, predicted_key, featureXName, predictedFeature.name);
+
+
+                    } else if (features.find(f => f.key === featureX).type === "categorical" &&
+                        features.find(f => f.key === featureY).type === "continuous") {
+
+                        const thisContainer = visArea.append("div")
+                            .attr("class", "plot-container")
+                            .style("position", "relative")
+                            .style("width", "200px")
+                            .style("height", "200px")
+                            .style("margin", "20px")
+                            .attr("data-feature-x", featureX);
+
+                        renderAverageBarChart(thisContainer.node(), featureX, featureY, featureXName, featureYName);
+                        renderAverageBarChart(predictContainer.node(), featureX, predicted_key, featureXName, predictedFeature.name);
+
+                    }
+                    */
+                } else { // if the term is not an interaction term
+                    
+                    const featureX = predictorVar;
+                    const featureXName = features.find(f => f.key === featureX)?.name || featureX;
+
+                    const thisContainer = visArea.append("div")
+                        .attr("class", "plot-container")
+                        .style("position", "relative")
+                        .style("width", "290px")
+                        .style("height", "200px")
+                        .style("margin-left", "10px")
+                        .style("margin-top", "20px")
+                        .style("margin-right", "10px")
+                        .style("margin-bottom", "20px")
+                        .attr("data-feature-x", featureX)
+                        /*
+                        .on("mouseenter", function () {
+                            d3.select(this)
+                                .style("width", "290px");
+                        })
+                        .on("mouseleave", function () {
+                            d3.select(this)
+                                .style("width", "200px");
+
+                            
+                        });*/
+
+
+                    /*
+                    const predictContainer = visArea.append("div")
+                        .attr("class", "plot-container")
+                        .style("position", "relative")
+                        .style("width", "290px")
+                        .style("height", "200px")
+                        .style("margin", "20px")
+                        .attr("data-feature-x", featureX);
+                    */
+                    if (features.find(f => f.key === featureX).type == 'continuous') {
+
+                        renderScatterPlot(thisContainer.node(), featureX, featureY, featureXName, featureYName, dataSubset);
+                        //renderScatterPlot(predictContainer.node(), featureX, predicted_key, featureXName, predictedFeature.name);
+
+                    } else {
+                        renderAverageBarChart(thisContainer.node(), featureX, featureY, featureXName, featureYName);
+                        //renderVerticalScatterPlot(thisContainer.node(), featureX, featureY, featureXName, featureYName);
+                        //renderViolinPlot(thisContainer.node(), featureX, featureY, featureXName, featureYName);
+
+                        renderAverageBarChart(predictContainer.node(), featureX, predicted_key, featureXName, predictedFeature.name);
+
+                    }
+                }
+            });
+
+        }
+
+        async function inputToFormula(userInput) {
+            // send user input to gpt
+            // Features available in the dataset
+            const availableKeys = features.map(f => f.key).join(", ");
+            const availableNames = features.map(f => f.name).join(", ");
+
+            const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: gpt_model,
+                    messages: [
+                        { role: "system", content: "You are an AI assistant that helps users build R formulas for linear regression models." },
+                        { role: "user", content: 
+                            `Check if all variables in this request exist in the dataset: "${userInput}". 
+                            The available variables are: ${availableKeys}. 
+                            If any variable is missing, list them explicitly and do NOT generate an R formula.
+                            If all variables exist, generate an R formula in the format: response_variable ~ predictor1 + predictor2 + predictor1:predictor2.
+                            Use predictor1 + predictor2 + predictor1:predictor2 instead of predictor1*predictor2 in case of interaction.
+                            Only include interaction term if the sentence implies that variables are interacting.
+                            Predictors such as predictor1 should be the corresponding key from ${availableKeys} that is similar to the input.
+                            Answer with one sentence, either just the formula or the listed variables that cannot be found.
+                            If there is formula, start sentence with "Here is the linear model corresponding to your interpretation: " 
+                            If there is no formula, reply with "Please try a different query."
+                            `     
+                        }
+                    ],
+                    max_tokens: 100
+                })
+            });
+
+            const data = await response.json();
+            const botResponse = data.choices[0].message.content.trim();
+            let formulaMatch ;
+            if (botResponse.startsWith("Here is the linear model corresponding to your interpretation")) {
+                formulaMatch = botResponse.match(/([a-zA-Z_]+\s*~\s*[a-zA-Z_0-9:+()^*\/\s-]+)/);
+                formulaMatch = formulaMatch[0].trim();
+            } else {
+                formulaMatch = 'No formula'
+            }
+            console.log(formulaMatch)
+            return formulaMatch;
+
+        }
+
+        function sendHypo(userHypo, textarea, testButton) {
+
+            // Get the current .cell
+            const cell = testButton.closest(".cell");
+
+            // Get the formula from .formula-display
+            const formulaDivs = cell.querySelectorAll(".formula-display");
+            const formulaDiv = formulaDivs[formulaDivs.length - 1];  // Get the last one
+ 
+            const fullText = formulaDiv.textContent.trim();
+            const prefix = "Here is the linear model corresponding to your interpretation: ";
+            //const formulaText = fullText.slice(prefix.length).trim()
+            const formulaText = fullText.slice(prefix.length).trim().replace(/\s*\([^)]*\)\s*$/, '');
+
+            console.log(formulaText)
+                        
+            // Use the formula directly
+            createHypoObj(formulaText);
+
+            matchHypo(userHypo, formulaText, testButton);
+
+            const parentCell = textarea.closest(".cell");
+            
+            // Replace original textarea with printed message 
+            const message = document.createElement("div");
+            message.textContent = userHypo;
+            message.className = "query-display";
+            message.style.marginTop = "10px";
+            message.style.fontWeight = "bold";
+            message.style.color = "#333";
+
+            textarea.replaceWith(message);
+                        
+            // Add formula summary message
+            const summaryMessage = document.createElement("div");
+            summaryMessage.textContent = "Here is the summary table of your hypothesis.";
+            summaryMessage.className = "formula-display";
+            summaryMessage.style.marginTop = "10px";
+            summaryMessage.style.fontStyle = "italic";
+            summaryMessage.style.color = "#333";
+
+            // Add next input box + Fit button 
+            const nextInputRow = document.createElement("div");
+            nextInputRow.className = "input-row"
+            nextInputRow.style.display = "flex";
+            nextInputRow.style.alignItems = "center";
+            nextInputRow.style.gap = "10px";
+            nextInputRow.style.marginTop = "10px";
+
+            const nextTextarea = document.createElement("textarea");
+            nextTextarea.className = "input-box";
+            nextTextarea.placeholder = "Type your input here...";
+            nextTextarea.style.flex = "1";
+
+            const nextFitButton = document.createElement("button");
+            nextFitButton.className = "fit-button";
+            nextFitButton.textContent = "Send";
+            nextFitButton.onclick = () => {
+                const userInput = nextTextarea.value.toLowerCase();
+                if (userInput.includes("hypothesis")) {
+                    console.log("test hypothesis")
+                    sendHypo(userInput, nextTextarea, nextFitButton)
+                } else if (userInput.includes("exclude")) { 
+                    excludeData(userInput, nextTextarea, nextFitButton);
+                } else {
+                    fitModel(userInput, nextTextarea, nextFitButton);
+                }
+            };
+
+            nextInputRow.appendChild(nextTextarea);
+            nextInputRow.appendChild(nextFitButton);
+
+            // Wrap all pieces of this modeling cycle together
+            const cycleBlock = document.createElement("div");
+            cycleBlock.className = "cycle";
+            cycleBlock.style.marginTop = "5px";
+            cycleBlock.style.borderTop = "1px solid #ccc";
+            cycleBlock.style.paddingTop = "5px";
+
+            cycleBlock.appendChild(message);
+            cycleBlock.appendChild(summaryMessage);
+            cycleBlock.appendChild(nextInputRow);
+
+            parentCell.appendChild(cycleBlock);
+
+            //testButton.remove()
+            testButton.parentElement?.remove();
+
+        }
+
+
+        function createHypoObj(formulaMean) {
+            hypothesesObject = {};
+
+            //const formulaMean = extractFormula(model_number);
+            console.log("Formula for this cell:", formulaMean);
+            const [dependentVariable, predictors] = formulaMean.split('~').map(s => s.trim());
+
+            // Split terms and identify interaction terms
+            const expandedTerms = predictors
+                .split('+')
+                .map(term => term.trim())
+                .filter(Boolean); // Remove empty strings
+
+            const interactionTerms = expandedTerms.filter(term => term.includes(':'));
+            const independentVariables = expandedTerms
+                .filter(term => !term.includes(':') )
+                .map(term => term.trim())
+                .filter(Boolean);
+
+            // Deduplicate independent variables
+            const uniqueIndependentVariables = [...new Set(independentVariables)];
+
+            // Identify categorical variables
+            const categoricalVariables = uniqueIndependentVariables.filter(p => {
+                const feature = features.find(f => f.key === p);
+                return feature && feature.type === 'categorical';
+            });
+
+            // Identify continuous variables
+            const continuousVariables = uniqueIndependentVariables.filter(p => {
+                const feature = features.find(f => f.key === p);
+                return feature && feature.type === 'continuous';
+            });
+
+            // Identify variables interacting with categorical variables
+            const interactingWithCategorical = [];
+            interactionTerms.forEach(term => {
+                const components = term.split(':').map(s => s.trim());
+                const categorical = components.find(comp => categoricalVariables.includes(comp));
+                if (categorical) {
+                    components.forEach(comp => {
+                        if (comp !== categorical) {
+                            interactingWithCategorical.push({ variable: comp, categorical });
+                        }
+                    });
+                }
+            });
+
+            console.log('interactingWithCategorical: ', interactingWithCategorical);
+
+            const uniqueInteractingWithCategorical = [...new Set(interactingWithCategorical.map(JSON.stringify))].map(JSON.parse);
+
+            let hypothesisCounter = 1;
+            let hypothesisSet = new Set(); // Set to store unique hypothesis strings
+
+            function addHypothesis(hypothesis, type, testType, var1, var2, relevant_var) {
+                if (!hypothesisSet.has(hypothesis)) { // Ensure uniqueness
+                    hypothesesObject[`H${hypothesisCounter}`] = {
+                        id: `H${hypothesisCounter}`,
+                        hypothesis: hypothesis,
+                        type: type,
+                        testType: testType,
+                        var1: var1,
+                        var2: var2,
+                        relevant_var: relevant_var
+                    };
+                    hypothesisSet.add(hypothesis); // Store in set to track duplicates
+                    hypothesisCounter++;
+                }
+            }
+
+            
+            // Add continuous variable level effects
+            continuousVariables.forEach(continuous => {
+                addHypothesis(
+                    `${continuous} significantly affects ${dependentVariable} (having non-zero slope).`,
+                    "Continuous Effect",
+                    "slope_effect",
+                    dependentVariable,
+                    continuous,
+                    [continuous, dependentVariable]
+                );
+            });
+
+            // Add categorical variable level effects
+            categoricalVariables.forEach(categorical => {
+                addHypothesis(
+                    `${dependentVariable} is significantly different for each pair of ${categorical}.`,
+                    "Categorical Level",
+                    "level_val",
+                    dependentVariable,
+                    categorical,
+                    [dependentVariable, categorical]
+                );
+            });
+
+            uniqueInteractingWithCategorical.forEach(({ variable, categorical }) => {
+                const variableType = features.find(f => f.key === variable)?.type;
+                const categoricalType = features.find(f => f.key === categorical)?.type;
+
+                if (variableType === "continuous") {
+                    // continuous × categorical interaction
+                    /*
+                    addHypothesis(
+                        `Effect of ${variable} on ${dependentVariable} are different for each pair of ${categorical}.`,
+                        "Con x Cat Interaction",
+                        "level_slope_pair",
+                        variable,
+                        categorical,
+                        [variable, categorical, dependentVariable]
+                    );
+                    */
+                    addHypothesis(
+                        `${variable} has a significant effect on ${dependentVariable} within each level of ${categorical}.`,
+                        "Effect of Con for each level of Cat",
+                        "level_slope_effect",
+                        variable,
+                        categorical,
+                        [variable, categorical, dependentVariable]
+                    );
+                } 
+                
+                if (variableType === "categorical" && categoricalType === "categorical") {
+                    // categorical1 × categorical2 interaction
+                    addHypothesis(
+                        `${variable} has a significant effect on ${dependentVariable} within each level of ${categorical}.`,
+                        "Cat x Cat Interaction",
+                        "level_val_interact",
+                        variable,
+                        categorical,
+                        [variable, categorical, dependentVariable]
+                    );
+
+                    // categorical2 × categorical1 interaction
+                    addHypothesis(
+                        `${categorical} has a significant effect on ${dependentVariable} within each level of ${variable}.`,
+                        "Cat x Cat Interaction",
+                        "level_val_interact",
+                        categorical,
+                        variable,
+                        [variable, categorical, dependentVariable]
+                    );
+                }
+            });
+
+            console.log('All possible Hypotheses from this model:', hypothesesObject);
+        }
+
+        async function matchHypo(userInput, formulaText, testButton) {
+            const formattedHypotheses = Object.values(hypothesesObject)
+                .map(h => `ID: ${h.id}, Hypothesis: "${h.hypothesis}", Type: "${h.type}", TestType: "${h.testType}", var1: "${h.var1}", var2: "${h.var2}", relevant_var: ${JSON.stringify(h.relevant_var)}`)
+                .join("\n");
+
+            const featureKeys = features.map(f => f.key);
+            const match_prompt_v0 = `
+                You are a strict JSON generator. You only return raw JSON. No explanations, no headers, no markdown, no comments, ever.
+
+                You are given:
+                1. A list of dataset variable keys: ${JSON.stringify(featureKeys)}
+                2. A user input: "${userInput}"
+                3. A list of structured hypotheses (formatted as JSON-like lines): ${formattedHypotheses}
+
+                Your task:
+                - Step 1: Identify which variable keys from the dataset the user is referring to (even if misspelled or described differently).
+                - Step 2: From the list of structured hypotheses, return only those where the "relevant_var" array contains ALL inferred variable keys.
+                Example: If the inferred variables are ["A", "B", "C"], then only return hypotheses where relevant_var includes all three of those keys. Any hypothesis with just two of those (e.g. ["A", "B"]) must be excluded.
+                If no match exists, return: {}
+
+                Output format:
+
+                Return ONLY the following JSON object. No explanation, no markdown, no preamble:
+                
+                {
+                "H1": {
+                    "id": "H1",
+                    "hypothesis": "text",
+                    "type": "Main and Interaction",
+                    "testType": "overall",
+                    "var1": "duration",
+                    "var2": "price",
+                    "relevant_var": ["duration", "price"]
+                },
+                "H3": {
+                    "id": "H3",
+                    "hypothesis": "text",
+                    "type": "Categorical Level",
+                    "testType": "level_val",
+                    "var1": "class",
+                    "var2": "price",
+                    "relevant_var": ["class", "price"]
+                }
+                }
+
+                If no match exists, return: {}
+
+                NO OTHER TEXT.
+                `;
+
+            const match_prompt = `You are given:
+                1. A list of dataset variable keys: ${JSON.stringify(featureKeys)}
+                2. A user input: "${userInput}"
+
+                Identify which variable keys from the dataset the user is referring to (even if misspelled or described differently).
+                Return the matched keys in the ["key1", "key2", "key3"] format
+                `;
+
+            const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: gpt_model,
+                    temperature: 0,
+                    messages: [
+                        { role: "system", content: "You are a helpful assistant who helps match hypotheses based on meaning." },
+                        { role: "user", content: match_prompt }
+                    ]
+                })
+            });
+
+            const data = await response.json();
+            const gptText = data.choices[0].message.content.trim();
+            const parsedVars = JSON.parse(gptText); 
+
+            const similarHypotheses = Object.fromEntries(
+                Object.entries(hypothesesObject).filter(
+                    ([key, value]) => arraysEqual(value.relevant_var, parsedVars)
+                )
+            );
+
+            console.log("similarHypotheses: ");
+            console.log(similarHypotheses);
+
+            if (Object.keys(similarHypotheses).length === 0) {
+                console.log("No matched hypotheses!");
+
+            } else {
+                
+                const hypotheses = Object.values(similarHypotheses)
+
+                hypotheses.forEach((hypoObj, i) => {
+
+                    const { testType, hypothesis, var1, var2 } = hypoObj;
+
+                    const isFinal = i === hypotheses.length - 1;
+
+                    getHypoResult(userInput, hypothesis, testType, var1, var2, isFinal, formulaText, testButton);  
+
+                });
+
+
+            }
+
+        }
+
+        async function testHypothesis(formulaMean, var1, var2, testType, indexFilter = null) {
+            if (excludeDataStatus == true) {
+                indexFilter = brushedIndices;
+            }
+
+            try {
+                const response = await fetch("http://localhost:8000/test_hypothesis", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: formulaMean,
+                        var1: var1,
+                        var2: var2,
+                        testType: testType,
+                        datasetName: "airline",
+                        filters: "",
+                        filter_indices: indexFilter
+                    })
+                });
+
+                const result = await response.json();
+
+                return result.results;
+
+            } catch (error) {
+                console.log("Hypothesis test error:", error.message);
+            }
+        }
+    
+        async function getHypoResult(userInput, hypo, testType, var1, var2, isFinal, this_formula) {
+            console.log("Testing hypothesis:", hypo);
+            console.log("Test hypo using formula:", this_formula);
+            
+            const test_result = await testHypothesis(this_formula, var1, var2, testType);
+            console.log(test_result);
+
+            const model_number = predCounter;
+
+            ///// Store in global result
+            // Append to existing or initialize if not present
+            
+            if (!testResultsByModel.has(model_number)) {
+                testResultsByModel.set(model_number, []);
+            }
+
+            const storedResults = testResultsByModel.get(model_number);
+            storedResults.push(...test_result); // Append new rows
+
+            const allResults = testResultsByModel.get(model_number);  // all results for this model number
+
+            console.log('testResultsByModel',testResultsByModel);
+            console.log('allResults',allResults);
+            
+
+            /////
+
+           
+
+            ////////////////////////////
+            // Add table result
+            ////////////////////////////
+
+            if (!isFinal) return;  // add table after the final hypothesis is tested
+
+            // Assign label for this query
+            if (!queryLabelMap[userInput]) {
+                queryLabelMap[userInput] = `Query${queryCounter++}`;
+            }
+
+            const queryLabel = queryLabelMap[userInput];
+
+            //const resultPanel = document.querySelector(`.result-panel[panel_number="${predCounter - 1}"]`);
+            //const resultContent = resultPanel.querySelector(".result-content");
+
+            const testButton = document.querySelector(".fit-button");
+            const cycleDiv = testButton.closest(".cycle");
+            const formulaDiv = cycleDiv.querySelector(".formula-display");
+
+
+            // Create collapsible section for this hypothesis query
+            const hypoWrapper = document.createElement("div");
+            hypoWrapper.className = "hypo-wrapper";
+            hypoWrapper.style.marginTop = "5px";
+
+            /*
+            // Header (click to expand)
+            const hypoHeader = document.createElement("div");
+            hypoHeader.className = "result-header";
+            hypoHeader.style.cursor = "pointer";
+            hypoHeader.style.background = "white";
+            hypoHeader.style.padding = "5px";
+            hypoHeader.style.marginBottom = "2px";
+            hypoHeader.style.fontSize = "12px";
+            hypoHeader.style.border = "1px solid black";
+            hypoHeader.textContent = queryLabel + ": " + userInput;
+            */
+            const hypoContent = document.createElement("div");
+            hypoContent.className = "hypo-summary-wrapper";
+            //hypoContent.style.display = "none"; // collapsed initially
+            hypoContent.style.padding = "5px";
+
+            // Toggle behavior
+            /*
+            hypoHeader.onclick = () => {
+                hypoContent.style.display = (hypoContent.style.display === "none") ? "block" : "none";
+            };
+
+            // Append header and content to wrapper
+            hypoWrapper.appendChild(hypoHeader);
+            */
+
+            hypoWrapper.appendChild(hypoContent);
+            //resultContent.appendChild(hypoWrapper);
+            cycleDiv.insertBefore(hypoWrapper, formulaDiv.nextSibling);
+
+
+            // split allResults by table types --- categorical, slope pair, and slope (zero)  (since these require unique tables)
+            const categoricalResults = allResults.filter(obj => obj.testType === "level_val_interact" || obj.testType === "level_val");
+            const slopePairResults = allResults.filter(obj => obj.testType === "level_slope_pair");
+            const slopeLevelResults = allResults.filter(obj => obj.testType === "level_slope_effect");
+            const slopeZeroResults = allResults.filter(obj => obj.testType === "slope_effect");
+
+            // Combined table 
+
+            for (let [index, obj] of allResults.entries()) { 
+                let tableId = "table_model" + model_number;
+                let table = document.getElementById(tableId);
+
+                if (!table) {
+
+                    table = document.createElement("table");
+                    table.className = "hypothesis-summary-table";
+                    table.id = tableId;
+                    table.style.marginTop = "5px";
+                    table.style.border = "1px solid #ccc";
+                    table.style.width = "auto";
+                    table.style.fontSize = "12px";
+
+                    const headerRow = document.createElement("tr");
+                    //headerRow.innerHTML = "<th>Test</th><th>Group</th><th>Price</th><th>Factor</th><th>Correlation</th><th>Result</th>";
+
+
+                    const headers = ["Test", obj.groupVar, "Price", obj.testVar, "Correlation", "Result"];
+                    headers.forEach(text => {
+                        const th = document.createElement("th");
+                        th.textContent = text;
+                        headerRow.appendChild(th);
+                    });
+
+                    table.appendChild(headerRow);
+
+
+                    table.appendChild(headerRow);
+
+                    const tbody = document.createElement("tbody");
+                    table.appendChild(tbody);
+
+                    hypoContent.appendChild(table);
+
+                }
+
+                let tbody = table.querySelector("tbody");
+                const row = document.createElement("tr");
+
+                // type of test column
+                const testCell = document.createElement("td");
+                let outcomeVar = 'price'
+                if (obj.testType == 'level_slope_effect') {
+                    testCell.textContent = 'Impact of ' + obj.testVar + ' on ' + outcomeVar + ' for this ' + obj.groupVar;
+                } else if (obj.testType == 'level_slope_pair') {
+                    testCell.textContent = 'Impact of ' + obj.testVar + '  on ' + outcomeVar + ' are different between 2 ' + obj.groupVar;
+                } else {
+                    testCell.textContent = 'All'
+                }
+
+                // cell for group
+                const groupCell = document.createElement("td");
+                if (obj.testType == 'level_slope_effect') {
+                    groupCell.textContent = obj[obj.groupVar];
+                } else if (obj.testType == 'level_slope_pair') {
+                    let contrast = obj.contrast;
+                    let [group1, group2] = contrast.split(" - ");
+                    groupCell.textContent = group1 + ' vs. ' + group2;
+                } else {
+                    groupCell.textContent = 'All'
+                }
+                
+                let container;
+                // cell for outcome variable
+                const yCell = document.createElement("td");
+
+                container = document.createElement("div");
+                container.style.position = "relative";
+                container.style.width = "50px";
+                container.style.height = "50px";
+                yCell.appendChild(container);  
+
+                
+                let filteredData;
+                if (obj.testType === 'level_slope_effect') {
+                    filteredData = dataset.filter(d => d[obj.groupVar] === obj[obj.groupVar]);
+                } else if (obj.testType === 'level_slope_pair') {
+                    let contrast = obj.contrast;
+                    let [group1, group2] = contrast.split(" - ");
+                    filteredData = dataset.filter(d => d[obj.groupVar] === group1 || d[obj.groupVar] === group2); 
+                } else {
+                    filteredData = dataset;
+                }
+
+
+
+                renderDistributionPlot(container, "price", "Price", "table", filteredData);
+
+                // create chart on mouseover
+                yCell.onmouseenter = () => {
+                    yCell.style.backgroundColor = "#fffacd";
+
+                    const visAreaId = "visarea-panel-" + model_number;
+                    const visArea = document.getElementById(visAreaId);
+                    if (!visArea) return;
+
+                    const outcomeObj = features[0];
+
+                    // Create temp container
+                    const container = d3.select(visArea).append("div")
+                        .attr("class", "plot-container hover-preview")
+                        .style("position", "relative")
+                        .style("width", "200px")
+                        .style("height", "200px")
+                        .style("margin", "10px")
+                        .attr("data-feature-x", outcomeObj.key)
+                        .node();
+
+                        renderDistributionPlot(container, "price", "Price", "visArea");
+
+                    yCell._hoverPreview = container;
+                };
+
+                yCell.onmouseleave = () => {
+                    yCell.style.backgroundColor = "";
+
+                    if (yCell._hoverPreview) {
+                        yCell._hoverPreview.remove();
+                        yCell._hoverPreview = null;
+                    }
+                };
+
+                // cell for independent variable (i.e. Factor column)
+                const xCell = document.createElement("td");
+                const featureType = features.find(f => f.key === obj.testVar).type;
+                if (featureType == 'continuous') {
+                    container = document.createElement("div");
+                    container.style.position = "relative";
+                    container.style.width = "50px";
+                    container.style.height = "50px";
+                    xCell.appendChild(container);  
+
+                    let filteredData;
+                    if (obj.testType === 'level_slope_effect') {
+                        filteredData = dataset.filter(d => d[obj.groupVar] === obj[obj.groupVar]);
+                    } else if (obj.testType === 'level_slope_pair') {
+                        let contrast = obj.contrast;
+                        let [group1, group2] = contrast.split(" - ");
+                        filteredData = dataset.filter(d => d[obj.groupVar] === group1 || d[obj.groupVar] === group2);
+
+                    } else {
+                        filteredData = dataset;
+                    }
+
+                    renderDistributionPlot(container, obj.testVar, obj.testVar, "table", filteredData);
+
+                    // create chart on mouseover
+                    xCell.onmouseenter = () => {
+                        xCell.style.backgroundColor = "#fffacd";
+
+                        const visAreaId = "visarea-panel-" + model_number;
+                        const visArea = document.getElementById(visAreaId);
+                        if (!visArea) return;
+
+                        const testVar = obj.testVar;
+                        const var1_Obj = features.find(f => f.key === testVar);
+
+                        // Create temp container
+                        const container = d3.select(visArea).append("div")
+                            .attr("class", "plot-container hover-preview")
+                            .style("position", "relative")
+                            .style("width", "200px")
+                            .style("height", "200px")
+                            .style("margin", "10px")
+                            .attr("data-feature-x", obj.testVar)
+                            .node();
+
+                            renderDistributionPlot(container, testVar, var1_Obj.name, "visArea");
+
+                            xCell._hoverPreview = container;
+                        };
+
+                    xCell.onmouseleave = () => {
+                        xCell.style.backgroundColor = "";
+                        if (xCell._hoverPreview) {
+                            xCell._hoverPreview.remove();
+                            xCell._hoverPreview = null;
+                        }
+                    };
+                }
+
+                // correlation column
+                const pairCell = document.createElement("td");
+                if (featureType == 'continuous') {
+                    container = document.createElement("div");
+                    container.style.position = "relative";
+                    container.style.width = "50px";
+                    container.style.height = "50px";
+                    pairCell.appendChild(container); 
+                    
+                    if (obj.testType === 'level_slope_effect') {
+                        filteredData = dataSubset.filter(d => d[obj.groupVar] === obj[obj.groupVar]);
+                    } else if (obj.testType === 'level_slope_pair') {
+                        let contrast = obj.contrast;
+                        let [group1, group2] = contrast.split(" - ");
+                        filteredData = dataSubset.filter(d => d[obj.groupVar] === group1 || d[obj.groupVar] === group2); 
+                    } else {
+                        filteredData = dataSubset;
+                    }
+
+                    renderScatterPlot(
+                        container,
+                        obj.testVar,
+                        features[0].key,
+                        obj.testVar,
+                        features[0].key,
+                        filteredData,
+                        null,   // currentLineData
+                        null,
+                        null,
+                        "table"
+                    );
+
+                    pairCell.onmouseenter = () => {
+                        pairCell.style.backgroundColor = "#fffacd";
+                        
+                        const visAreaId = "visarea-panel-" + model_number;
+                        const visArea = document.getElementById(visAreaId);
+                        if (!visArea) return;
+
+                        const testVar = obj.testVar;
+                        const var1_Obj = features.find(f => f.key === testVar);
+                        const outcomeObj = features[0];
+
+                        // Create temp container
+                        const container = d3.select(visArea).append("div")
+                            .attr("class", "plot-container hover-preview")
+                            .style("position", "relative")
+                            .style("width", "200px")
+                            .style("height", "200px")
+                            .style("margin", "10px")
+                            .attr("data-feature-x", testVar)
+                            .node();
+
+                        renderScatterPlot(
+                            container,
+                            testVar,
+                            outcomeObj.key,
+                            var1_Obj?.name || testVar,
+                            outcomeObj?.name || outcomeObj.key,
+                            dataset, 
+                            currentLineData
+                        );
+
+                        pairCell._hoverPreview = container;
+                    };
+
+                    pairCell.onmouseleave = () => {
+                        pairCell.style.backgroundColor = "";
+                        if (pairCell._hoverPreview) {
+                            pairCell._hoverPreview.remove();
+                            pairCell._hoverPreview = null;
+                        }
+                    };
+                }
+
+                // Result column
+                const resultCell = document.createElement("td");
+
+                let pval = obj["p.value"];
+                if (pval === 0 || pval < 0.0001) {
+                    pval = "< 0.0001";
+                } else {
+                    pval = pval.toFixed(4);
+                }
+
+                // Create color square based on p.value
+                const square = document.createElement("span");
+                square.style.display = "inline-block";
+                square.style.width = "10px";
+                square.style.height = "10px";
+                square.style.marginRight = "6px";
+                square.style.verticalAlign = "middle";
+                square.style.backgroundColor = obj["p.value"] <= 0.05 ? "lightgreen" : "red";
+                square.title = `p-value: ${pval}`;
+                
+                // Wrap square and labels in a container
+                const resultWrapper = d3.select(resultCell)
+                    .append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("gap", "5px");
+
+                // Append the square
+                resultWrapper.append(() => square);
+
+                // Append the text + arrow container
+                const textContainer = resultWrapper.append("div")
+                    .style("display", "flex")
+                    .style("flex-direction", "column");
+
+                // Add marker definition once to <defs>
+                const svgDefs = d3.select("body").select("svg#arrow-defs");
+                if (svgDefs.empty()) {
+                    d3.select("body").append("svg")
+                        .attr("id", "arrow-defs")
+                        .attr("width", 0)
+                        .attr("height", 0)
+                        .append("defs")
+                        .append("marker")
+                        .attr("id", "arrowhead")
+                        .attr("viewBox", "0 0 3 3")
+                        .attr("refX", 2.7)
+                        .attr("refY", 1.5)
+                        .attr("markerWidth", 3)
+                        .attr("markerHeight", 3)
+                        .attr("orient", "auto")
+                        .append("path")
+                        .attr("d", "M0,0 L3,1.5 L0,3")
+                        .attr("fill", "black");
+                }
+
+                let baseLength = 10;
+                let scaling = obj[obj.testVar + ".trend"];
+                let flip = scaling < 0;
+                let scaledLength = baseLength * Math.abs(scaling);
+
+                if (obj.testType == 'level_slope_effect') {
+                    createArrowRow(textContainer, "price", scaledLength, flip);
+                    createArrowRow(textContainer, obj.testVar, baseLength);
+                }
+
+                // append to table
+                [testCell, groupCell, yCell, xCell, pairCell, resultCell].forEach(cell => row.appendChild(cell));
+                tbody.appendChild(row);
+                
+            }
+
+        }
+
+        // function for creating arrows in the rusult columns
+        function createArrowRow(container, label, length, flip = false) {
+            const row = container.append("div")
+                .style("display", "flex")
+                .style("align-items", "center");
+
+            // Label
+            row.append("div")
+                .style("width", "50px")
+                .style("text-align", "right")
+                .style("font-size", "10px")
+                .style("margin-right", "5px")
+                .text(label);
+
+            const svgWidth = Math.abs(length) + 10;
+            const svg = row.append("svg")
+                .attr("width", svgWidth)
+                .attr("height", 6);
+
+            const line = svg.append("line")
+                .attr("y1", 3)
+                .attr("y2", 3)
+                .attr("stroke", "black")
+                .attr("stroke-width", 1.25);
+
+            if (!flip) {
+                // Normal: left to right
+                line
+                    .attr("x1", 0)
+                    .attr("x2", Math.abs(length))
+                    .attr("marker-end", "url(#arrowhead)")
+                    .attr("marker-start", "");
+            } else {
+                // Flipped: right to left, aligned so end matches bottom arrow start
+                line
+                    .attr("x1", Math.abs(length))
+                    .attr("x2", 0)
+                    .attr("marker-start", "url(#arrowhead)")
+                    .attr("marker-end", "");
+            }
+        }
+
+        function addInputRowToCycle(cycleDiv) {
+            // Prevent duplicate input-rows
+            const existing = cycleDiv.querySelector(".input-row");
+            if (existing) return;
+
+            const inputRow = document.createElement("div");
+            inputRow.className = "input-row";
+            inputRow.style.display = "flex";
+            inputRow.style.alignItems = "center";
+            inputRow.style.gap = "10px";
+            inputRow.style.marginTop = "10px";
+
+            const textarea = document.createElement("textarea");
+            textarea.className = "input-box";
+            textarea.placeholder = "Type your input here...";
+            textarea.style.flex = "1";
+
+            const fitButton = document.createElement("button");
+            fitButton.className = "fit-button";
+            fitButton.textContent = "Send";
+            fitButton.onclick = () => {
+                const userInput = textarea.value.toLowerCase();
+                if (userInput.includes("hypothesis")) {
+                    sendHypo(userInput, textarea, fitButton);
+                } else {
+                    fitModel(userInput, textarea, fitButton);
+                }
+            };
+
+            inputRow.appendChild(textarea);
+            inputRow.appendChild(fitButton);
+
+            cycleDiv.appendChild(inputRow);
+        }
+
+        function computeCat(userHypo, textarea, testButton) {
+            console.log("Distributing by category");
+
+            // Get the most recent brushed data
+            const keys = Object.keys(brushedPointsByPlot);
+            if (keys.length === 0) {
+                console.log("No brushed data available");
+                return;
+            }
+
+            const latestKey = keys[keys.length - 1];  // Assume last-added is most recent
+            const brushedData = brushedPointsByPlot[latestKey]?.data;
+
+            if (!brushedData || brushedData.length === 0) {
+                console.log("No brushed data available");
+                return;
+            }
+
+            console.log(`Latest brushed data has ${brushedData.length} points`);
+            
+            features.forEach(feature => {
+                if (feature.type === "categorical") {
+                    const freqMap = {};
+
+                    // Step 1: initialize all categories to 0
+                    let allCategories;
+                    if (customCategoryOrder[feature.key]) {
+                        allCategories = customCategoryOrder[feature.key];
+                    } else {
+                        allCategories = [...new Set(originalData.map(d => d[feature.key]))];
+                    }
+                    allCategories.forEach(cat => freqMap[cat] = 0);
+
+                    // Step 2: count from brushed data
+                    brushedData.forEach(d => {
+                        const val = d[feature.key];
+                        if (val in freqMap) freqMap[val]++;
+                    });
+
+                    const total = brushedData.length;
+                    const percentages = Object.fromEntries(
+                        allCategories.map(cat => [cat, ((freqMap[cat] / total) * 100).toFixed(1) + "%"])
+                    );
+
+                    console.log(`\n${feature.name} (${feature.key}):`);
+                    console.table(percentages);
+                }
+            });
+
+            const parentCell = textarea.closest(".cell");
+            
+            // Replace original textarea with printed message 
+            const message = document.createElement("div");
+            message.textContent = userHypo;
+            message.className = "query-display";
+            message.style.marginTop = "10px";
+            message.style.fontWeight = "bold";
+            message.style.color = "#333";
+
+            textarea.replaceWith(message);
+                        
+            // Add formula summary message
+            const summaryMessage = document.createElement("div");
+            summaryMessage.textContent = "Here is the summary table of the selected data points.";
+            summaryMessage.className = "formula-display";
+            summaryMessage.style.marginTop = "10px";
+            summaryMessage.style.fontStyle = "italic";
+            summaryMessage.style.color = "#333";
+
+            // Add next input box + Fit button 
+            const nextInputRow = document.createElement("div");
+            nextInputRow.className = "input-row"
+            nextInputRow.style.display = "flex";
+            nextInputRow.style.alignItems = "center";
+            nextInputRow.style.gap = "10px";
+            nextInputRow.style.marginTop = "10px";
+
+            const nextTextarea = document.createElement("textarea");
+            nextTextarea.className = "input-box";
+            nextTextarea.placeholder = "Type your input here...";
+            nextTextarea.style.flex = "1";
+
+            // Summary sentence block (above show more)
+            const summarySentences = document.createElement("div");
+            summarySentences.className = "category-summary-lines";
+            summarySentences.style.marginTop = "10px";
+            summarySentences.style.fontSize = "13px";
+            summarySentences.style.color = "#333";
+
+            // Build summary sentences for categories ≥ 50%
+            features.forEach(feature => {
+                if (feature.type === "categorical") {
+                    const allCategories = customCategoryOrder[feature.key] || [...new Set(originalData.map(d => d[feature.key]))];
+                    const freqMap = Object.fromEntries(allCategories.map(cat => [cat, 0]));
+
+                    brushedData.forEach(d => {
+                        const val = d[feature.key];
+                        if (val in freqMap) freqMap[val]++;
+                    });
+
+                    const total = brushedData.length;
+                    allCategories.forEach(cat => {
+                        const pct = (freqMap[cat] / total) * 100;
+                        if (pct >= 50) {
+                            const sentence = document.createElement("div");
+                            sentence.textContent = `These data points are ${pct.toFixed(1)}% ${cat} ${feature.name.toLowerCase()}.`;
+                            summarySentences.appendChild(sentence);
+                        }
+                    });
+                }
+            });
+
+
+            const nextFitButton = document.createElement("button");
+            nextFitButton.className = "fit-button";
+            nextFitButton.textContent = "Send";
+            nextFitButton.onclick = () => {
+                const userInput = nextTextarea.value.toLowerCase();
+                if (userInput.includes("hypothesis")) {
+                    console.log("test hypothesis")
+                    sendHypo(userInput, nextTextarea, nextFitButton)
+                } else {
+                    fitModel(userInput, nextTextarea, nextFitButton);
+                }
+            };
+
+            nextInputRow.appendChild(nextTextarea);
+            nextInputRow.appendChild(nextFitButton);
+
+            // Wrap all pieces of this modeling cycle together
+            const cycleBlock = document.createElement("div");
+            cycleBlock.className = "cycle";
+            cycleBlock.style.marginTop = "5px";
+            cycleBlock.style.borderTop = "1px solid #ccc";
+            cycleBlock.style.paddingTop = "5px";
+
+            cycleBlock.appendChild(message);
+            cycleBlock.appendChild(summaryMessage);
+            cycleBlock.appendChild(summarySentences); 
+
+            // Button to toggle visibility
+            const showMoreBtn = document.createElement("button");
+            showMoreBtn.textContent = "Show more";
+            showMoreBtn.className = "fit-button";
+            showMoreBtn.style.marginTop = "8px";
+
+            // Category summary (initially hidden)
+            const summaryWrapper = document.createElement("div");
+            summaryWrapper.className = "category-summary";
+            summaryWrapper.style.marginTop = "8px";
+            summaryWrapper.style.fontSize = "13px";
+            summaryWrapper.style.color = "#333";
+            summaryWrapper.style.display = "none";  // Hidden by default
+
+            showMoreBtn.onclick = () => {
+                const isVisible = summaryWrapper.style.display === "block";
+                summaryWrapper.style.display = isVisible ? "none" : "block";
+                showMoreBtn.textContent = isVisible ? "Show more" : "Hide summary";
+            };
+
+            // Build summary content
+            features.forEach(feature => {
+                if (feature.type === "categorical") {
+                    let allCategories = customCategoryOrder[feature.key] || [...new Set(originalData.map(d => d[feature.key]))];
+                    let freqMap = {};
+                    allCategories.forEach(cat => freqMap[cat] = 0);
+                    brushedData.forEach(d => {
+                        const val = d[feature.key];
+                        if (val in freqMap) freqMap[val]++;
+                    });
+                    const total = brushedData.length;
+
+                    //const section = document.createElement("div");
+                    //section.innerHTML = `<strong>${feature.name}</strong><br>`;
+
+                    const section = document.createElement("div");
+
+                    // Make the title clickable
+                    const clickableTitle = document.createElement("div");
+                    clickableTitle.textContent = feature.name;
+                    clickableTitle.style.fontWeight = "bold";
+                    clickableTitle.style.cursor = "pointer";
+                    clickableTitle.style.marginBottom = "2px";
+                    clickableTitle.style.textDecoration = "underline";
+                    clickableTitle.onclick = () => {
+                        // Traverse upward to find the closest previous .vis-area from an earlier cycle
+                        let visArea = null;
+                        let current = clickableTitle.closest(".cycle");
+
+                        while (current && !visArea) {
+                            current = current.previousElementSibling;
+                            if (current && current.classList.contains("cycle")) {
+                                visArea = current.querySelector(".vis-area");
+                            }
+                        }
+
+                        // Create a new container for the chart
+                        const container = d3.select(visArea).append("div")
+                            .attr("class", "plot-container")
+                            .style("position", "relative")
+                            .style("width", "200px")
+                            .style("height", "200px")
+                            .style("margin", "20px");
+
+                        renderBarChart(container.node(), feature.key, feature.name);
+                
+                    };
+
+                    section.appendChild(clickableTitle);
+
+                    
+                    allCategories.forEach(cat => {
+                        const pct = ((freqMap[cat] / total) * 100).toFixed(1);
+                        const row = document.createElement("div");
+                        row.textContent = `${cat}: ${pct}%`;
+                        section.appendChild(row);
+                    });
+
+                    summaryWrapper.appendChild(section);
+                    summaryWrapper.appendChild(document.createElement("br"));
+                }
+            });
+
+            // Append both to the cycle
+            cycleBlock.appendChild(showMoreBtn);
+            cycleBlock.appendChild(summaryWrapper);
+            cycleBlock.appendChild(nextInputRow);
+
+            parentCell.appendChild(cycleBlock);
+
+            //testButton.remove()
+            testButton.parentElement?.remove();
+        }
+
+
+
+        // Helper to compare two arrays regardless of order
+        function arraysEqual(a, b) {
+            if (a.length !== b.length) return false;
+            const sortedA = [...a].sort();
+            const sortedB = [...b].sort();
+            return sortedA.every((val, index) => val === sortedB[index]);
+        }
+
+        // Add the first cell on load
+        addCell();
+
+    </script>
+
+</body>
+</html>
+
