@@ -5,6 +5,12 @@
     <title>Notebook Interface</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="vis.js"></script>
+    <script src="scatterplot.js"></script>
+    <script src="histogram.js"></script>
+    <script src="countBar.js"></script>
+    <script src="avgBar.js"></script>
+    <script src="toggle.js"></script>
+
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -89,7 +95,7 @@
     </div>
 
     <script>
-        const API_KEY = '.....';   // replace with API key
+        const API_KEY = '';   // repalce with API key
         const gpt_model = "gpt-4";
 
         let cellCounter = 0;
@@ -617,6 +623,9 @@
                 .style("margin-right", "10px")
                 .style("margin-bottom", "20px")
 
+            renderDistributionPlot(distrContainer.node(), featureY, featureYName, 'visArea', dataSubset = dataSubset)
+
+            /*
             const distrContainerPred = visArea.append("div")
                 .attr("class", "plot-container")
                 .style("position", "relative")
@@ -627,8 +636,8 @@
                 .style("margin-right", "10px")
                 .style("margin-bottom", "20px")
 
-            renderDistributionPlot(distrContainer.node(), featureY, featureYName, 'visArea', dataSubset = dataSubset)
             renderDistributionPlot(distrContainerPred.node(), predicted_key, predictedFeature.name, 'visArea', dataSubset = dataSubset)
+            */
 
             predictorVars.forEach(predictorVar => {
             
@@ -707,7 +716,7 @@
                     const thisContainer = visArea.append("div")
                         .attr("class", "plot-container")
                         .style("position", "relative")
-                        .style("width", "290px")
+                        .style("width", "200px")
                         .style("height", "200px")
                         .style("margin-left", "10px")
                         .style("margin-top", "20px")
@@ -746,7 +755,7 @@
                         //renderVerticalScatterPlot(thisContainer.node(), featureX, featureY, featureXName, featureYName);
                         //renderViolinPlot(thisContainer.node(), featureX, featureY, featureXName, featureYName);
 
-                        renderAverageBarChart(predictContainer.node(), featureX, predicted_key, featureXName, predictedFeature.name);
+                        //renderAverageBarChart(predictContainer.node(), featureX, predicted_key, featureXName, predictedFeature.name);
 
                     }
                 }
